@@ -1,5 +1,5 @@
-import { useState, Component } from "react";
-import { data } from "./data";
+import { useEffect, useState, Component } from "react";
+import { TABS, loadTechnology } from "./data";
 
 // ── Error Boundary ────────────────────────────────────────────────────────────
 class ErrorBoundary extends Component {
@@ -54,26 +54,59 @@ function getColor(topics, activeTopic) {
   return COLOR_PALETTE[(idx >= 0 ? idx : 0) % COLOR_PALETTE.length];
 }
 
-// ── Tabs come from data keys — add a new technology in data and it appears here
-const TABS = Object.keys(data);
-
 // ── Main component ────────────────────────────────────────────────────────────
 function InterviewPrep() {
   const firstTab   = TABS[0];
-  const firstTopic = Object.keys(data[firstTab] || {})[0] || "";
 
   const [tab,      setTab]      = useState(firstTab);
-  const [topic,    setTopic]    = useState(firstTopic);
+  const [topic,    setTopic]    = useState("");
   const [openIdx,  setOpenIdx]  = useState(null);
   const [revealed, setRevealed] = useState({});
   const [search,   setSearch]   = useState("");
+  const [dataByTab, setDataByTab] = useState({});
+  const [loadingTab, setLoadingTab] = useState(firstTab);
+  const [loadError, setLoadError] = useState(null);
 
-  // Topics for the selected technology — come directly from data keys
-  const topics    = Object.keys(data[tab] || {});
+  useEffect(() => {
+    let active = true;
+
+    async function loadTabData() {
+      if (dataByTab[tab]) {
+        setLoadingTab((current) => (current === tab ? null : current));
+        return;
+      }
+
+      setLoadingTab(tab);
+      setLoadError(null);
+
+      try {
+        const loaded = await loadTechnology(tab);
+        if (!active) return;
+
+        setDataByTab((current) => ({ ...current, [tab]: loaded }));
+        setLoadingTab((current) => (current === tab ? null : current));
+      } catch (error) {
+        if (!active) return;
+
+        setLoadError(error);
+        setLoadingTab((current) => (current === tab ? null : current));
+      }
+    }
+
+    loadTabData();
+
+    return () => {
+      active = false;
+    };
+  }, [tab, dataByTab]);
+
+  // Topics for the selected technology are loaded on demand with the tab data
+  const currentData = dataByTab[tab] || {};
+  const topics    = Object.keys(currentData);
   const safeTopic = topics.includes(topic) ? topic : topics[0];
   const lc        = getColor(topics, safeTopic);
 
-  const allQuestions = data[tab]?.[safeTopic] || [];
+  const allQuestions = currentData[safeTopic] || [];
 
   const query     = search.trim().toLowerCase();
   const questions = query
@@ -85,19 +118,19 @@ function InterviewPrep() {
       )
     : allQuestions;
 
-  const totalAll = Object.values(data[tab] || {}).reduce(
+  const totalAll = Object.values(currentData || {}).reduce(
     (sum, arr) => sum + (Array.isArray(arr) ? arr.length : 0),
     0
   );
+  const isLoadingCurrentTab = loadingTab === tab && topics.length === 0;
 
   const rkey        = (idx) => `${tab}-${safeTopic}-${idx}`;
   const toggle      = (idx) => setOpenIdx(openIdx === idx ? null : idx);
   const revealAnswer= (idx) => setRevealed((p) => ({ ...p, [rkey(idx)]: true }));
 
   const switchTab = (t) => {
-    const first = Object.keys(data[t] || {})[0] || "";
     setTab(t);
-    setTopic(first);
+    setTopic("");
     setOpenIdx(null);
     setSearch("");
   };
@@ -107,6 +140,16 @@ function InterviewPrep() {
     setOpenIdx(null);
     setSearch("");
   };
+
+  useEffect(() => {
+    if (topics.length === 0) {
+      return;
+    }
+
+    if (!topic || !topics.includes(topic)) {
+      setTopic(topics[0]);
+    }
+  }, [topic, topics]);
 
   return (
     <div style={{ fontFamily: "'Inter','Segoe UI',sans-serif", minHeight: "100vh", background: "linear-gradient(135deg,#0f0c29,#302b63,#24243e)", padding: "28px 16px", color: "#e8e8f0" }}>
@@ -125,7 +168,7 @@ function InterviewPrep() {
           </div>
         </div>
 
-        {/* Technology Tabs — from Object.keys(data) */}
+        {/* Technology Tabs */}
         <div style={{ display: "flex", gap: 10, justifyContent: "center", marginBottom: 14, flexWrap: "wrap" }}>
           {TABS.map((t) => (
             <button
@@ -138,22 +181,28 @@ function InterviewPrep() {
           ))}
         </div>
 
-        {/* Topic Tabs — from Object.keys(data[tab]) */}
+        {/* Topic Tabs */}
         <div style={{ display: "flex", gap: 7, justifyContent: "center", marginBottom: 20, flexWrap: "wrap" }}>
-          {topics.map((tp, i) => {
-            const c      = COLOR_PALETTE[i % COLOR_PALETTE.length];
-            const active = safeTopic === tp;
-            const count  = data[tab][tp]?.length || 0;
-            return (
-              <button
-                key={tp}
-                onClick={() => switchTopic(tp)}
-                style={{ padding: "6px 16px", borderRadius: 50, border: `1.5px solid ${active ? c.active : "rgba(255,255,255,0.1)"}`, cursor: "pointer", fontWeight: 600, fontSize: 12, transition: "all 0.2s", background: active ? c.bg : "transparent", color: active ? c.active : "#6b7280", whiteSpace: "nowrap" }}
-              >
-                {tp} <span style={{ opacity: 0.6 }}>({count})</span>
-              </button>
-            );
-          })}
+          {topics.length === 0 && loadingTab === tab ? (
+            <div style={{ color: "#6b7280", fontSize: 12, padding: "6px 12px" }}>
+              Loading topics...
+            </div>
+          ) : (
+            topics.map((tp, i) => {
+              const c      = COLOR_PALETTE[i % COLOR_PALETTE.length];
+              const active = safeTopic === tp;
+              const count  = currentData[tp]?.length || 0;
+              return (
+                <button
+                  key={tp}
+                  onClick={() => switchTopic(tp)}
+                  style={{ padding: "6px 16px", borderRadius: 50, border: `1.5px solid ${active ? c.active : "rgba(255,255,255,0.1)"}`, cursor: "pointer", fontWeight: 600, fontSize: 12, transition: "all 0.2s", background: active ? c.bg : "transparent", color: active ? c.active : "#6b7280", whiteSpace: "nowrap" }}
+                >
+                  {tp} <span style={{ opacity: 0.6 }}>({count})</span>
+                </button>
+              );
+            })
+          )}
         </div>
 
         {/* Search */}
@@ -173,9 +222,21 @@ function InterviewPrep() {
           </span>
         </div>
 
+        {loadError && (
+          <div style={{ textAlign: "center", color: "#fca5a5", marginBottom: 18, fontSize: 13 }}>
+            Failed to load {tab}: {loadError.message}
+          </div>
+        )}
+
+        {isLoadingCurrentTab ? (
+          <div style={{ textAlign: "center", color: "#6b7280", padding: 40 }}>
+            Loading {tab} questions...
+          </div>
+        ) : null}
+
         {/* Q&A List */}
         <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-          {questions.length === 0 && (
+          {questions.length === 0 && !isLoadingCurrentTab && (
             <div style={{ textAlign: "center", color: "#4b5563", padding: 40 }}>
               No questions match your search.
             </div>
